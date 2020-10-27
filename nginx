@@ -1,0 +1,70 @@
+# Redirect all HTTP traffic to HTTPS.
+server {
+	if ($host = vip.frontity.io) {
+		return 301 https://$host$request_uri;
+	}
+	listen 80 default_server;
+	listen [::]:80 default_server ipv6only=on;
+	server_name vip.frontity.io;
+	return 404;
+}
+
+# Main server block.
+server {
+	listen [::]:443 ssl ipv6only=on;
+	listen 443 ssl;
+	root /var/www/wordpress;
+	server_name vip.frontity.io;
+	index index.php;
+
+	# SSL config. Managed by Certbot.
+	ssl_certificate /etc/letsencrypt/live/vip.frontity.io/fullchain.pem; # managed by Certbot
+	ssl_certificate_key /etc/letsencrypt/live/vip.frontity.io/privkey.pem; # managed by Certbot
+	include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+	ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+	# Gzip.
+	gzip on;
+	gzip_types
+	application/javascript
+	application/json
+	text/css
+	text/plain;
+
+	# Set default backend.
+	set $backend "WordPress";
+
+	# 1. Use WordPress for all the URLs that start with `/wp-`.
+	location /wp- {
+		try_files $uri $uri/ /index.php$is_args$args;
+	}
+
+	# 2. Use WordPress for all the TXT and XML files.
+	location ~ \.(txt|xml|xsl)$ {
+		try_files $uri $uri/ /index.php$is_args$args;
+	}
+
+	# 3. Use Frontity for all the URLs that start with `/static`.
+	location /static {
+		set $backend "Frontity";
+		proxy_pass http://localhost:3000;
+	}
+
+	# 4. The rest of the URLs.
+	location / {
+		# 4.1 Use Frontity if there is no WordPress auth cookie.
+		if ($http_cookie !~* "wordpress_logged_in") {
+			set $backend "Frontity";
+			proxy_pass http://localhost:3000;
+		}
+		# 4.2 Use WordPress with Embedded mode if there is an auth cookie.
+		try_files $uri $uri/ /index.php$is_args$args;
+	}
+
+	location ~ \.php$ {
+		include snippets/fastcgi-php.conf;
+		fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+	}
+
+	add_header "X-Backend" $backend;
+}
